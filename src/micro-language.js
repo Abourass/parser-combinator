@@ -1,4 +1,4 @@
-const {digits, str, choice, sequenceOf, between, betweenBrackets, lazy} = require('./index.js');
+const {digits, str, choice, sequenceOf, between, betweenBrackets, lazy} = require('./parser-library.js');
 
 const numberParser = digits.map(x => ({type: 'number', value: Number(x)}));
 

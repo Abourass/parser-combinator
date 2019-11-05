@@ -1,241 +1,63 @@
-const updateParserState = (state, index, result) => ({ ...state, index, result });
+// Header length: 5 * 32-bit = 20 bytes
+// TOS: 0x00
+// Total Length: 0x0044 (68 bytes)
+// Identification: 0xad0b
+// Flags and Fragments: 0x0000
+// TTL: 0x40 (64 hops)
+// Protocol: 0x11 (UDP)
+// Header Checksom: 0x7272
+// Source: 0xac1402fd (172.20.2.253)
+// Destination: 0xac140006 (172.20.0.6)
+// A 16 bit number: (24161)
+// 0101111001100001
 
-const updateParserResult = (state, result) => ({...state, result});
+// And some different ways we might interpret this number
+// 0101111001100001                 :: As one 16 bit number (24161)
+// 01011110 01100001                :: As two 8 bit numbers (94, 97)
+// 0101 1110 0110 0001              :: As four 4 bit numbers (5, 14, 6, 1)
+// 0 1 0 1 1 1 1 0 0 1 1 0 0 0 0 1  :: As sixteen individual bits
 
-const updateParserError = (state, errorMsg) => ({ ...state, isError: true, error: errorMsg });
+const {Parser, updateParserError, updateParserState, sequenceOf} = require('./parser-library');
 
-class Parser {
-  constructor(parserStateTransformerFn){
-    this.parserStateTransformerFn = parserStateTransformerFn;
-  }
-
-  run(targetString){
-    const initialState = {
-      targetString,
-      index: 0,
-      result: null,
-      isError: null,
-      error: null
-    };
-    return this.parserStateTransformerFn(initialState)
-  }
-
-  map(fn){
-    return new Parser(parserState => {
-      const nextState = this.parserStateTransformerFn(parserState);
-      if (nextState.isError){return nextState}
-      return updateParserResult(nextState, fn(nextState.result))
-    })
-  }
-
-  chain(fn){
-    return new Parser(parserState => {
-      const nextState = this.parserStateTransformerFn(parserState);
-      if (nextState.isError){return nextState}
-      const nextParser = fn(nextState.result);
-      return nextParser.parserStateTransformerFn(nextState)
-    })
-  }
-
-  errorMap(fn){
-    return new Parser(parserState => {
-      const nextState = this.parserStateTransformerFn(parserState);
-      if (!nextState.isError){return nextState}
-      return updateParserError(nextState, fn(nextState.error, nextState.index))
-    })
-  }
-}
-
-const lettersRegex = /^[A-Za-z]+/, digitsRegex = /^[0-9]+/, lettersAndDigitsRegex = /^[A-Za-z0-9]+/;
-
-const str = stringToMatch => new Parser(parserState => {
-  const {targetString, index, isError} = parserState;
-  if (isError){return parserState}
-  const slicedTarget = targetString.slice(index);
-
-  if (slicedTarget.length === 0){return updateParserError(parserState, `str: Tried to match ${stringToMatch} but got an unexpected end of input`)}
-
-  if (slicedTarget.startsWith(stringToMatch)) {
-    return updateParserState(parserState, index + stringToMatch.length, stringToMatch)
-  }
-  return updateParserError(parserState, `str: Tried to match ${stringToMatch} but got ${targetString.slice(index, index + 14)}`)
-});
-
-const letters = new Parser(parserState => {
-  const {targetString, index, isError} = parserState;
-  if (isError){return parserState}
-  const slicedTarget = targetString.slice(index);
-
-  if (slicedTarget.length === 0){return updateParserError(parserState, `letters: Got an unexpected end of input`)}
-
-  const regexMatch = slicedTarget.match(lettersRegex);
-
-  if (regexMatch) {
-    return updateParserState(parserState, index + regexMatch[0].length, regexMatch[0])
-  }
-  return updateParserError(parserState, `letters: Couldn't match any letters at index ${index}`)
-});
-
-const digits = new Parser(parserState => {
-  const {targetString, index, isError} = parserState;
-  if (isError){return parserState}
-  const slicedTarget = targetString.slice(index);
-
-  if (slicedTarget.length === 0){return updateParserError(parserState, `digits: Got an unexpected end of input`)}
-
-  const regexMatch = slicedTarget.match(digitsRegex);
-
-  if (regexMatch) {
-    return updateParserState(parserState, index + regexMatch[0].length, regexMatch[0])
-  }
-  return updateParserError(parserState, `digits: Couldn't match any digits at index ${index}`)
-});
-
-const lettersAndDigits = new Parser(parserState => {
-  const {targetString, index, isError} = parserState;
-  if (isError){return parserState}
-  const slicedTarget = targetString.slice(index);
-
-  if (slicedTarget.length === 0){return updateParserError(parserState, `lettersAndDigits: Got an unexpected end of input`)}
-
-  const regexMatch = slicedTarget.match(lettersAndDigitsRegex);
-
-  if (regexMatch) {
-    return updateParserState(parserState, index + regexMatch[0].length, regexMatch[0])
-  }
-  return updateParserError(parserState, `lettersAndDigits: Couldn't match any letters or digits at index ${index}`)
-});
-
-const sequenceOf = parsers  => new Parser(parserState => {
+const Bit = new Parser(parserState => {
   if (parserState.isError){return parserState}
-  const results = [];
-  let nextState = parserState;
-
-  for (let parser of parsers){
-    nextState = parser.parserStateTransformerFn(nextState);
-    results.push(nextState.result)
-  }
-
-  return updateParserResult(nextState, results);
+  const byteOffset = Math.floor(parserState.index / 8);
+  if (byteOffset >= parserState.target.byteLength){ return updateParserError(parserState, 'Bit: received an unexpected end of input')}
+  const byte = parserState.target.getUint8(byteOffset);
+  const bitOffset = (parserState.index % 8);
+  const result = (byte & 1<<bitOffset) >> bitOffset;
+  return updateParserState(parserState, parserState.index + 1, result);
 });
 
-const choice = parsers  => new Parser(parserState => {
+const Zero = new Parser(parserState => {
   if (parserState.isError){return parserState}
-
-  for (let parser of parsers){
-    const nextState = parser.parserStateTransformerFn(parserState);
-    if (!nextState.isError){return nextState}
-  }
-
-  return updateParserError(parserState, `choice: Unable to match with any parser at ${parserState.index}`);
+  const byteOffset = Math.floor(parserState.index / 8);
+  if (byteOffset >= parserState.target.byteLength){ return updateParserError(parserState, 'Zero: received an unexpected end of input')}
+  const byte = parserState.target.getUint8(byteOffset);
+  const bitOffset = 7 - (parserState.index % 8);
+  const result = (byte & 1<<bitOffset) >> bitOffset;
+  if (result !== 0) { return updateParserError(parserState, `Zero: Expected a zero, but got a one at index ${parserState.index}`); }
+  return updateParserState(parserState, parserState.index + 1, result);
 });
 
-const many = parser  => new Parser(parserState => {
+const One = new Parser(parserState => {
   if (parserState.isError){return parserState}
-
-  let nextState = parserState, done = false;
-  const results = [];
-
-  while (!done){
-    let testState = parser.parserStateTransformerFn(nextState);
-    if (!testState.isError){
-      results.push(testState.result);
-      nextState = testState;
-    } else { done = true; }
-  }
-  return updateParserResult(nextState, results);
+  const byteOffset = Math.floor(parserState.index / 8);
+  if (byteOffset >= parserState.target.byteLength){ return updateParserError(parserState, 'One: received an unexpected end of input')}
+  const byte = parserState.target.getUint8(byteOffset);
+  const bitOffset = 7 - (parserState.index % 8);
+  const result = (byte & 1<<bitOffset) >> bitOffset;
+  if (result !== 1) { return updateParserError(parserState, `One: Expected a one, but got a zero at index ${parserState.index}`); }
+  return updateParserState(parserState, parserState.index + 1, result);
 });
 
-const manyOrOne = parser  => new Parser(parserState => {
-  if (parserState.isError){return parserState}
+const parser = sequenceOf([
+  One, One, One, Zero, One, Zero, One, Zero
+]);
+const data = (new Uint8Array([234, 235])).buffer;
 
-  let nextState = parserState;
-  const results = [];
-  let done = false;
+const dataView = new DataView(data);
 
-  while (!done){
-    nextState = parser.parserStateTransformerFn(nextState);
-    if (!nextState.isError){
-      results.push(nextState.result)
-    } else {
-      done = true;
-    }
-  }
+const res = parser.run(dataView);
 
-  if (results.length === 0){return updateParserError(parserState, `manyOrOne: No parsers returned a match at index: ${parserState.index}`)}
-
-  return updateParserResult(nextState, results);
-});
-
-const between = (leftParser, rightParser) => contentParser => sequenceOf([leftParser, contentParser, rightParser]).map(results => results[1]);
-
-const separatedBy = separatorParser =>  valueParser => new Parser(parserState => {
-  const results = [];
-  let nextState = parserState;
-
-  while (true){
-    const thingWeWantState = valueParser.parserStateTransformerFn(nextState);
-    if (thingWeWantState.isError){break}
-    results.push(thingWeWantState.result);
-    nextState = thingWeWantState;
-
-    const separatorState = separatorParser.parserStateTransformerFn(nextState);
-    if (separatorState.isError){break}
-    nextState = separatorState;
-  }
-
-  return updateParserResult(nextState, results)
-});
-
-const separatedByOne = separatorParser =>  valueParser => new Parser(parserState => {
-  const results = [];
-  let nextState = parserState;
-
-  while (true){
-    const thingWeWantState = valueParser.parserStateTransformerFn(nextState);
-    if (thingWeWantState.isError){break}
-    results.push(thingWeWantState.result);
-    nextState = thingWeWantState;
-
-    const separatorState = separatorParser.parserStateTransformerFn(nextState);
-    if (separatorState.isError){break}
-    nextState = separatorState;
-  }
-
-  if (results.length === 0){return updateParserError(parserState, `separatedByOne: Unable to capture any results at index: ${parserState.index}`)}
-  return updateParserResult(nextState, results)
-});
-
-const lazy = parserThunk => new Parser(parserState => {
-  const parser = parserThunk();
-  return parser.parserStateTransformerFn(parserState);
-});
-
-const betweenBrackets = between(str('('), str(')'));
-const betweenSquareBrackets = between(str('['), str(']'));
-const commaSeparated = separatedBy(str(','));
-
-const value = lazy(() => choice([digits, arrayParser]));
-
-const arrayParser = betweenSquareBrackets(commaSeparated(value));
-
-const stringParser = letters.map(result => ({type: 'string', value: result}));
-const numberParser = digits.map(result => ({type: 'number', value: Number(result)}));
-const diceRollParser = sequenceOf([digits, str('d'), digits]).map(([numberOfDice, _, sides]) => ({type: 'diceRoll', value: [Number(numberOfDice), Number(sides)]}));
-
-module.exports = {
-  str,
-  letters,
-  digits,
-  betweenBrackets,
-  betweenSquareBrackets,
-  sequenceOf,
-  choice,
-  many,
-  manyOrOne,
-  separatedBy,
-  separatedByOne,
-  between,
-  lazy
-}
-
+console.log(res);
